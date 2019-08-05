@@ -1,0 +1,137 @@
+#include "pic24_all.h"
+#include <stdio.h>
+
+#ifndef _LPOSCEN
+#error "This example only works with a device that has a secondary oscillator."
+#endif
+#ifndef _RTCSYNC
+#error "This example only works with a device that has an RTCC module."
+#endif
+
+#define CONFIG_alarmState() CONFIG_RB14_AS_DIG_OUTPUT()
+#define alarmState (_LATB14)
+
+void config_pb()  {
+#if (HARDWARE_PLATFORM == EMBEDDED_C1)
+  CONFIG_RB7_AS_DIG_INPUT();
+  ENABLE_RB7_PULLUP();
+#else
+  CONFIG_RB13_AS_DIG_INPUT();
+  ENABLE_RB13_PULLUP();
+#endif
+  // Give the pullup some time to take effect.
+  DELAY_US(1);
+}
+
+#if (HARDWARE_PLATFORM == EMBEDDED_C1)
+# define PB_PRESSED()   (_RB7 == 0)
+# define PB_RELEASED()  (_RB7 == 1)
+#else
+# define PB_PRESSED()   (_RB13 == 0)
+# define PB_RELEASED()  (_RB13 == 1)
+#endif
+
+
+typedef union _unionRTCC {
+  struct {  //four 16 bit registers
+    uint8_t yr;
+    uint8_t null;
+    uint8_t date;
+    uint8_t month;
+    uint8_t hour;
+    uint8_t wday;
+    uint8_t sec;
+    uint8_t min;
+    uint8_t alarm;
+    uint8_t alarmHour;
+    uint8_t alarmMin;
+  } u8;
+  uint16_t regs[4];
+} unionRTCC;
+
+unionRTCC u_RTCC;
+
+uint8_t getBCDvalue(char *sz_1) {
+  char sz_buff[8];
+  uint16_t u16_bin;
+  uint8_t  u8_bcd;
+  outString(sz_1);
+  inStringEcho(sz_buff,7);
+  sscanf(sz_buff,"%d", (int *)&u16_bin);
+  u8_bcd = u16_bin/10;   //most significant digit
+  u8_bcd = u8_bcd << 4;
+  u8_bcd = u8_bcd | (u16_bin%10);
+  return(u8_bcd);
+}
+
+void getDateFromUser(void) {
+  u_RTCC.u8.yr = getBCDvalue("Enter year (0-99): ");
+  u_RTCC.u8.month = getBCDvalue("Enter month (1-12): ");
+  u_RTCC.u8.date = getBCDvalue("Enter day of month (1-31): ");
+  u_RTCC.u8.wday = getBCDvalue("Enter week day (0-6): ");
+  u_RTCC.u8.hour = getBCDvalue("Enter hour (0-23): ");
+  u_RTCC.u8.min = getBCDvalue("Enter min (0-59): ");
+  u_RTCC.u8.sec = getBCDvalue("Enter sec(0-59): ");
+  u_RTCC.u8.alarm = getBCDvalue("Turn on alarm? (0-1): ");
+}
+
+// Alarm on state
+
+void alarmOn(void) {
+    if (u_RTCC.u8.alarm == 1) {
+        u_RTCC.u8.alarmHour = getBCDvalue("Enter alarm hour (0-23): ");
+        u_RTCC.u8.alarmMin = getBCDvalue("Enter alarm min (0-59): ");
+    };
+}
+
+void checkalarm(void) {
+      if (u_RTCC.u8.alarm == 1) { 
+          while (u_RTCC.u8.hour == u_RTCC.u8.alarmHour && u_RTCC.u8.min == u_RTCC.u8.alarmMin){
+    
+    alarmState = 1;
+    printf ("wake up");
+          };
+       
+    };
+  
+}
+
+//set date
+void setRTCC(void) {
+  uint8_t u8_i;
+  __builtin_write_RTCWEN();   //enable write to RTCC, sets RTCWEN
+  RCFGCALbits.RTCEN = 0;      //disable the RTCC
+  RCFGCALbits.RTCPTR = 3;     //set pointer reg to start
+  for (u8_i=0; u8_i<4; u8_i++) RTCVAL = u_RTCC.regs[u8_i];
+  RCFGCALbits.RTCEN = 1;     //Enable the RTCC
+  RCFGCALbits.RTCWREN = 0;   //can clear without unlock
+}
+
+void readRTCC(void) {
+  uint8_t u8_i;
+  RCFGCALbits.RTCPTR = 3;     //set pointer reg to start
+  for (u8_i=0; u8_i<4; u8_i++) u_RTCC.regs[u8_i] = RTCVAL;
+}
+
+void printRTCC(void) {
+  printf ("day(wday)/mon/yr: %2x(%2x)/%2x/%2x, %02x:%02x:%02x \n",
+          (uint16_t) u_RTCC.u8.date,(uint16_t) u_RTCC.u8.wday, (uint16_t) u_RTCC.u8.month,
+          (uint16_t) u_RTCC.u8.yr, (uint16_t) u_RTCC.u8.hour, (uint16_t) u_RTCC.u8.min, (uint16_t) u_RTCC.u8.sec);
+}
+
+int main(void) {
+  __builtin_write_OSCCONL(OSCCON | 0x02);    //  OSCCON.SOSCEN=1;
+  configBasic(HELLO_MSG);   //say Hello!
+  getDateFromUser();    //get initial date/time
+  setRTCC();            //set the date/time  
+  alarmOn();            //set alarm
+  checkalarm();
+  
+  while (1) {
+    while (!RCFGCALbits.RTCSYNC) doHeartbeat();
+    readRTCC();
+    printRTCC();
+    DELAY_MS(30);
+  }
+}
+
